@@ -1,0 +1,454 @@
+// Home — a browser start page. Build with `maca run build.maca`.
+//
+// The browser owns storage, JSON, file pickers and drag events (the `import js`
+// block); the page itself — clock, lock, sections, tiles, editor — is Maca.
+// Styling is Tailwind utilities + daisyUI classes only, no stylesheet of ours.
+
+import js """
+(function () {
+  const KEY = "homepage.config";
+  const LOCK = "homepage.locked";
+  // kept as text: dragging and sorting mutate `cfg` in place, and a shared
+  // object would let those edits rewrite the copy "Reload config file" restores.
+  const BAKED = JSON.stringify(window.__CFG__ || { sections: [] });
+
+  let cfg = restore();
+  let note = "";
+  let drag = null;
+  let hover = null;
+  let target = null;
+
+  function restore() {
+    try {
+      const saved = localStorage.getItem(KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return JSON.parse(BAKED);
+  }
+
+  function store() {
+    localStorage.setItem(KEY, JSON.stringify(cfg, null, 2));
+  }
+
+  function refresh() {
+    if (typeof update === "function") update();
+  }
+
+  function prune() {
+    cfg.sections = cfg.sections.filter((s) => (s.links || []).length > 0);
+  }
+
+  window.cfg_sections = () => cfg.sections || [];
+  window.cfg_note = () => note;
+  window.is_list = () => cfg.layout !== "grid";
+  window.is_new = () => !target || target.i < 0;
+
+  window.cfg_layout_toggle = function () {
+    cfg.layout = window.is_list() ? "grid" : "list";
+    store();
+    note = "layout: " + cfg.layout;
+  };
+
+  window.cfg_sort = function () {
+    for (const section of window.cfg_sections()) {
+      (section.links || []).sort((a, b) => a.title.localeCompare(b.title));
+    }
+    store();
+    note = "sorted A-Z";
+    refresh();
+  };
+
+  window.cfg_reset = function () {
+    localStorage.removeItem(KEY);
+    cfg = JSON.parse(BAKED);
+    note = "reloaded config/links.json";
+    refresh();
+  };
+
+  window.cfg_export = function () {
+    const text = JSON.stringify(cfg, null, 2);
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "links.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    note = "downloaded — move it to config/links.json and rebuild";
+  };
+
+  window.cfg_import = function () {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "application/json,.json";
+    picker.addEventListener("change", () => {
+      const file = picker.files[0];
+      if (!file) return;
+      file.text().then((text) => {
+        try {
+          const next = JSON.parse(text);
+          if (!next || !Array.isArray(next.sections)) {
+            note = "config needs a \"sections\" array";
+          } else {
+            cfg = next;
+            store();
+            note = "imported";
+          }
+        } catch (e) {
+          note = "invalid JSON: " + e.message;
+        }
+        refresh();
+      });
+    });
+    picker.click();
+  };
+
+  // ---- the edit dialog -----------------------------------------------------
+  window.cfg_new = function () {
+    target = { s: -1, i: -1 };
+  };
+
+  window.cfg_write = function (title, url, icon, section) {
+    const name = (section || "Links").trim();
+    const link = { title: title.trim(), url: url.trim(), icon: icon.trim() };
+    if (!link.title || !link.url) {
+      note = "title and url are required";
+      return;
+    }
+    let at = -1;
+    if (target && target.i >= 0) {
+      const from = cfg.sections[target.s];
+      if (from) {
+        from.links.splice(target.i, 1);
+        if (from.title === name) at = target.i;
+      }
+    }
+    let into = cfg.sections.find((s) => s.title === name);
+    if (!into) {
+      into = { title: name, links: [] };
+      cfg.sections.push(into);
+    }
+    into.links.splice(at < 0 ? into.links.length : at, 0, link);
+    prune();
+    store();
+    note = "saved " + link.title;
+  };
+
+  window.cfg_delete = function () {
+    if (!target || target.i < 0) return;
+    const from = cfg.sections[target.s];
+    if (!from) return;
+    const gone = from.links.splice(target.i, 1)[0];
+    prune();
+    store();
+    note = "deleted " + (gone ? gone.title : "");
+  };
+
+  function open_editor(s, i) {
+    const link = cfg.sections[s].links[i];
+    target = { s, i };
+    state.form_title = link.title;
+    state.form_url = link.url;
+    state.form_icon = link.icon || "";
+    state.form_section = cfg.sections[s].title;
+    state.editing = true;
+    refresh();
+  }
+
+  window.is_locked = () => localStorage.getItem(LOCK) !== "0";
+  window.lock_toggle = () =>
+    localStorage.setItem(LOCK, window.is_locked() ? "0" : "1");
+
+  window.now_time = () => new Date().toTimeString().slice(0, 8);
+  window.now_date = () =>
+    new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+
+  window.refresh = refresh;
+
+  // ---- drag & drop: reorder within a section, or move across sections ------
+  function spot(node) {
+    if (!node || !node.closest) return null;
+    const tile = node.closest("[data-tile]");
+    if (tile) {
+      return { s: +tile.dataset.section, i: +tile.dataset.index, el: tile };
+    }
+    const zone = node.closest("[data-drop]");
+    return zone ? { s: +zone.dataset.section, i: -1, el: null } : null;
+  }
+
+  function mark(el, cls, on) {
+    if (el) el.classList.toggle(cls, on);
+  }
+
+  function move(from, to) {
+    const sections = window.cfg_sections();
+    if (!sections[from.s] || !sections[to.s]) return;
+    const link = sections[from.s].links.splice(from.i, 1)[0];
+    if (!link) return;
+    const into = sections[to.s].links;
+    into.splice(to.i < 0 ? into.length : to.i, 0, link);
+    store();
+    note = "moved " + link.title;
+    refresh();
+  }
+
+  function drop_done() {
+    mark(drag && drag.el, state.drag_class, false);
+    mark(hover, state.drop_class, false);
+    drag = null;
+    hover = null;
+  }
+
+  document.addEventListener("dragstart", (e) => {
+    const at = spot(e.target);
+    if (!at || !at.el || window.is_locked()) return;
+    drag = at;
+    mark(at.el, state.drag_class, true);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", at.el.dataset.index);
+  });
+
+  document.addEventListener("dragover", (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const at = spot(e.target);
+    const next = at ? at.el : null;
+    if (next === hover) return;
+    mark(hover, state.drop_class, false);
+    hover = next;
+    mark(hover, state.drop_class, true);
+  });
+
+  document.addEventListener("drop", (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    const at = spot(e.target);
+    const from = drag;
+    drop_done();
+    if (at) move(from, at);
+  });
+
+  document.addEventListener("dragend", drop_done);
+
+  document.addEventListener("click", (e) => {
+    const pencil = e.target.closest ? e.target.closest("[data-edit]") : null;
+    if (pencil) {
+      e.preventDefault();
+      open_editor(+pencil.dataset.section, +pencil.dataset.index);
+      return;
+    }
+    // unlocked means arranging, so a tile click rearranges instead of navigating
+    if (!window.is_locked() && e.target.closest && e.target.closest("[data-tile]")) {
+      e.preventDefault();
+    }
+  });
+
+  function tick() {
+    const time = document.getElementById("clock");
+    if (time) time.textContent = window.now_time();
+    const date = document.getElementById("date");
+    if (date) date.textContent = window.now_date();
+  }
+
+  document.documentElement.setAttribute("data-theme", "night");
+  // the clock writes its own nodes: an update() every second would rebuild the
+  // tiles mid-drag and drop the caret out of the dialog's inputs.
+  setInterval(tick, 1000);
+})();
+"""
+
+Link = { title: str, url: str, icon: str }
+Section = { title: str, links: Link[] }
+
+// what the block above lends to Maca
+cfg_sections() -> Section[]
+cfg_note() -> str
+cfg_new() -> bool
+cfg_write(title: str, url: str, icon: str, section: str) -> bool
+cfg_delete() -> bool
+cfg_sort() -> bool
+cfg_reset() -> bool
+cfg_export() -> bool
+cfg_import() -> bool
+cfg_layout_toggle() -> bool
+is_list() -> bool
+is_new() -> bool
+is_locked() -> bool
+lock_toggle() -> bool
+refresh() -> bool
+now_time() -> str
+now_date() -> str
+
+editing = false
+form_title = ""
+form_url = ""
+form_icon = ""
+form_section = ""
+
+const tile_class = "btn btn-ghost glass h-auto min-h-0 justify-start gap-3 px-3 py-3 rounded-xl no-underline font-normal"
+const tile_icon = "text-2xl shrink-0"
+const tile_title = "text-sm font-semibold truncate"
+const pencil_class = "btn btn-xs btn-circle btn-ghost ml-auto shrink-0"
+const section_head = "text-xs uppercase tracking-wide opacity-50 font-semibold"
+const list_class = "flex flex-col gap-2"
+// the drag handlers above read these off `state`, so the classes ship as CSS
+const drag_class = "opacity-30"
+const drop_class = "bg-[rgba(139,92,246,0.35)]"
+// daisyUI's `glass` draws a diagonal reflex that reads as a seam on a wide row
+const glass_vars = "--glass-opacity:7%;--glass-reflex-opacity:0%;--glass-blur:14px"
+const grid_class = "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"
+
+pencil(s: int, i: int) -> str {
+  glyph = "<iconify-icon icon=\"lucide:pencil\"></iconify-icon>"
+  meta = "data-edit=\"\" data-section=\"{s}\" data-index=\"{i}\""
+  "<span class=\"{pencil_class}\" {meta}>{glyph}</span>"
+}
+
+tile(link: Link, s: int, i: int) -> str {
+  icon = "<iconify-icon class=\"{tile_icon}\" icon=\"{link.icon}\"></iconify-icon>"
+  name = "<span class=\"{tile_title}\">{link.title}</span>"
+  edit = is_locked() ? "" : pencil(s, i)
+  meta = "data-tile=\"\" data-section=\"{s}\" data-index=\"{i}\" draggable=\"true\""
+  open = "<a class=\"{tile_class}\" style=\"{glass_vars}\" href=\"{link.url}\" title=\"{link.url}\" {meta}>"
+  "{open}{icon}{name}{edit}</a>"
+}
+
+section_html(section: Section, s: int) -> str {
+  tiles = ""
+  i = 0
+  while i < len(section.links) {
+    tiles = tiles ++ tile(section.links[i], s, i)
+    i = i + 1
+  }
+  head = "<h2 class=\"{section_head}\">{section.title}</h2>"
+  rows = is_list() ? list_class : grid_class
+  body = "<div class=\"{rows}\">{tiles}</div>"
+  wrap = "<section class=\"{list_class}\" data-drop=\"\" data-section=\"{s}\">"
+  "{wrap}{head}{body}</section>"
+}
+
+sections_html() -> str {
+  sections = cfg_sections()
+  out = ""
+  s = 0
+  while s < len(sections) {
+    out = out ++ section_html(sections[s], s)
+    s = s + 1
+  }
+  out
+}
+
+lock_icon() -> str {
+  glyph = is_locked() ? "lucide:lock" : "lucide:lock-open"
+  "<iconify-icon class=\"text-2xl\" icon=\"{glyph}\"></iconify-icon>"
+}
+
+icon_preview() -> str =>
+  "<iconify-icon class=\"text-2xl\" icon=\"{form_icon}\"></iconify-icon>"
+
+lock_class() -> str =>
+  is_locked()
+    ? "btn btn-ghost btn-circle opacity-30"
+    : "btn btn-ghost btn-circle opacity-70"
+
+toolbar_class() -> str =>
+  is_locked()
+    ? "hidden"
+    : "glass flex flex-wrap items-center gap-2 p-3 rounded-xl"
+
+modal_class() -> str => editing ? "modal modal-open" : "modal"
+
+delete_class() -> str =>
+  is_new() ? "hidden" : "btn btn-sm btn-error btn-outline"
+
+layout_label() -> str => is_list() ? "Vertical" : "Grid"
+
+toggle_lock() {
+  lock_toggle()
+  refresh()
+}
+
+toggle_layout() {
+  cfg_layout_toggle()
+  refresh()
+}
+
+add_link() {
+  cfg_new()
+  form_title = ""
+  form_url = ""
+  form_icon = "lucide:link"
+  form_section = ""
+  editing = true
+  refresh()
+}
+
+edit_save() {
+  cfg_write(form_title, form_url, form_icon, form_section)
+  editing = false
+  refresh()
+}
+
+edit_delete() {
+  cfg_delete()
+  editing = false
+  refresh()
+}
+
+edit_close() {
+  editing = false
+  refresh()
+}
+
+sort_links() { cfg_sort() }
+
+export_json() {
+  cfg_export()
+  refresh()
+}
+
+import_json() { cfg_import() }
+
+reset_config() { cfg_reset() }
+
+main() -> Element =>
+  div(class="min-h-screen bg-gradient-to-br from-base-300 via-base-200 to-base-100 text-base-content font-sans px-4 py-10"
+    div(class="mx-auto max-w-3xl flex flex-col gap-8"
+      header(class="flex items-center gap-4"
+        div(class="flex flex-col"
+          span(id="clock", class="text-[2.6rem] leading-none font-bold tabular-nums", now_time())
+          span(id="date", class="text-xs opacity-50 mt-1", now_date())
+        )
+        div(class="flex-1")
+        button(class=lock_class(), on:click=toggle_lock, html=lock_icon())
+      )
+      div(class="flex flex-col gap-6", html=sections_html())
+      div(class=toolbar_class(), style=glass_vars
+        button(class="btn btn-sm btn-primary", on:click=add_link, "Add link")
+        button(class="btn btn-sm", on:click=toggle_layout, layout_label())
+        button(class="btn btn-sm", on:click=sort_links, "Sort A-Z")
+        button(class="btn btn-sm", on:click=export_json, "Export")
+        button(class="btn btn-sm", on:click=import_json, "Import")
+        button(class="btn btn-sm btn-ghost", on:click=reset_config, "Reload config file")
+        span(class="text-xs opacity-50", cfg_note())
+      )
+    )
+    div(class=modal_class()
+      div(class="modal-box glass flex flex-col gap-3", style=glass_vars
+        h3(class="font-bold text-lg", "Link")
+        input(class="input input-bordered w-full", placeholder="Title", bind:value=form_title)
+        input(class="input input-bordered w-full", placeholder="https://…", bind:value=form_url)
+        div(class="flex items-center gap-2"
+          input(class="input input-bordered flex-1", placeholder="lucide:link", bind:value=form_icon)
+          span(class="w-10 flex items-center justify-center", html=icon_preview())
+        )
+        input(class="input input-bordered w-full", placeholder="Section", bind:value=form_section)
+        div(class="modal-action"
+          button(class=delete_class(), on:click=edit_delete, "Delete")
+          div(class="flex-1")
+          button(class="btn btn-sm btn-ghost", on:click=edit_close, "Cancel")
+          button(class="btn btn-sm btn-primary", on:click=edit_save, "Save")
+        )
+      )
+    )
+  )

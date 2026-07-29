@@ -1,0 +1,53 @@
+// Build the start page: compile src/home.maca to build/index.html, vendor
+// daisyUI + iconify from maca_modules, bake config/links.json into the page.
+
+// the full sheet, not styled.css: `glass`, `modal` and the transitions the page
+// leans on only exist in this one.
+const daisyui = "maca_modules/daisyui/dist/full.css"
+const iconify = "maca_modules/iconify-icon/dist/iconify-icon.min.js"
+
+vendor() {
+  make_dir("build/vendor")
+  write_file("build/vendor/daisyui.css", read_file(daisyui))
+  write_file("build/vendor/iconify-icon.js", read_file(iconify))
+}
+
+bake(html: str, config: str) -> str {
+  head = "<link rel=\"stylesheet\" href=\"vendor/daisyui.css\">\n<style>"
+  boot = "<div id=\"app\"></div>\n<script src=\"vendor/iconify-icon.js\"></script>\n<script>window.__CFG__ = {config};</script>"
+  page = html.replace("<title>home</title>", "<title>tabpane</title>")
+  page = page.replace("<style>", head)
+  page.replace("<div id=\"app\"></div>", boot)
+}
+
+// links.local.json is git-ignored: private links stay out of the repo
+config_path() -> str {
+  local = "config/links.local.json"
+  file_exists(local) ? local : "config/links.json"
+}
+
+compile() -> int {
+  argv = "build", "--target", "js", "src/home.maca", "-o", "build"
+  code = exec("maca", argv)
+  // 127 = not found: on Windows only `maca.exe` is on the shell's PATH.
+  code == 127 ? exec("maca.exe", argv) : code
+}
+
+main() -> int {
+  if compile() != 0 {
+    fail "maca build --target js failed"
+  }
+  vendor()
+
+  page = bake(read_file("build/index.html"), read_file(config_path()))
+  if !page.contains("window.__CFG__") {
+    fail "config was not baked into build/index.html"
+  }
+  if !page.contains("vendor/daisyui.css") || !page.contains("vendor/iconify-icon.js") {
+    fail "vendor assets were not linked from build/index.html"
+  }
+  write_file("build/index.html", page)
+
+  info("built build/index.html")
+  0
+}

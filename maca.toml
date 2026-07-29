@@ -1,0 +1,21 @@
+[package]
+name = "tabpane"
+version = "0.1.0"
+
+[[bin]]
+name = "tabpane"
+path = "build.maca"
+
+# Dependencies — `maca add npm:pkg | git+url | name@ver`.
+[dependencies]
+daisyui = "npm:daisyui@^4"
+iconify-icon = "npm:iconify-icon"
+
+# Formatting — `maca fmt` reads these (defaults shown).
+[format]
+indent_style = "space"
+indent_size = 2
+
+# `maca <name>` runs a script alias.
+[scripts]
+start = "maca run build.maca"

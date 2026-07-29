@@ -1,0 +1,25 @@
+{
+  "layout": "list",
+  "sections": [
+    {
+      "title": "Google",
+      "links": [
+        { "title": "Gmail", "url": "https://mail.google.com/", "icon": "simple-icons:gmail" },
+        { "title": "Calendar", "url": "https://calendar.google.com/", "icon": "simple-icons:googlecalendar" },
+        { "title": "Drive", "url": "https://drive.google.com/", "icon": "simple-icons:googledrive" },
+        { "title": "Docs", "url": "https://docs.google.com/", "icon": "simple-icons:googledocs" },
+        { "title": "Photos", "url": "https://photos.google.com/", "icon": "simple-icons:googlephotos" },
+        { "title": "YouTube", "url": "https://www.youtube.com/", "icon": "simple-icons:youtube" }
+      ]
+    },
+    {
+      "title": "AI",
+      "links": [
+        { "title": "Claude", "url": "https://claude.ai/", "icon": "simple-icons:claude" },
+        { "title": "ChatGPT", "url": "https://chatgpt.com/", "icon": "simple-icons:openai" },
+        { "title": "Gemini", "url": "https://gemini.google.com/", "icon": "simple-icons:googlegemini" },
+        { "title": "Perplexity", "url": "https://www.perplexity.ai/", "icon": "simple-icons:perplexity" }
+      ]
+    }
+  ]
+}
