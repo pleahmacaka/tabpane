@@ -3,3 +3,6 @@
 *.o
 /maca_modules
 /config/links.local.json
+# written by build.maca from whichever config file it picked, so it carries the
+# private links whenever links.local.json exists
+/src/links.gen.js

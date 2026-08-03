@@ -2,6 +2,14 @@
 name = "tabpane"
 version = "0.1.0"
 
+# What the page is, as distinct from what its file is called: the source is
+# src/home.maca, and a browser start page should read "New Tab" in the tab.
+# A key that is not title/lang/description is a build error, so a misspelt
+# `titel` cannot quietly leave the file's own name in the title bar.
+[page]
+title = "New Tab"
+lang = "en"
+
 [[bin]]
 name = "tabpane"
 path = "build.maca"

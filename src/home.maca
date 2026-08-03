@@ -2,7 +2,19 @@
 //
 // The browser owns storage, JSON, file pickers and drag events (the `import js`
 // block); the page itself — clock, lock, sections, tiles, editor — is Maca.
+// The two meet on `maca` and nowhere else: the block answers the signatures
+// declared here with `maca.provide`, writes this file's state with `maca.set`
+// and reads it with `maca.get`.
 // Styling is Tailwind utilities + daisyUI classes only, no stylesheet of ours.
+
+// A quoted string names a file, read at build time and inlined; a """…""" block
+// is source. The full daisyUI sheet, not styled.css: `glass`, `modal` and the
+// transitions the page leans on only exist in this one. It lands ahead of the
+// generated <style>, so our own utilities still win.
+import css "../maca_modules/daisyui/dist/full.css"
+import js "../maca_modules/iconify-icon/dist/iconify-icon.min.js"
+// written by build.maca, which picks config/links.local.json over links.json
+import js "links.gen.js"
 
 import js """
 (function () {
@@ -30,42 +42,43 @@ import js """
     localStorage.setItem(KEY, JSON.stringify(cfg, null, 2));
   }
 
-  function refresh() {
-    if (typeof update === "function") update();
-  }
-
   function prune() {
     cfg.sections = cfg.sections.filter((s) => (s.links || []).length > 0);
   }
 
-  window.cfg_sections = () => cfg.sections || [];
-  window.cfg_note = () => note;
-  window.is_list = () => cfg.layout !== "grid";
-  window.is_new = () => !target || target.i < 0;
+  // Local, because the block's own code calls them too; `maca.provide` below is
+  // what makes them answer the Maca declarations.
+  const sections = () => cfg.sections || [];
+  const is_list = () => cfg.layout !== "grid";
+  const is_locked = () => localStorage.getItem(LOCK) !== "0";
+  // the clock's own tick writes these into the two nodes as well
+  const now_time = () => new Date().toTimeString().slice(0, 8);
+  const now_date = () =>
+    new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
 
-  window.cfg_layout_toggle = function () {
-    cfg.layout = window.is_list() ? "grid" : "list";
+  function layout_toggle() {
+    cfg.layout = is_list() ? "grid" : "list";
     store();
     note = "layout: " + cfg.layout;
-  };
+  }
 
-  window.cfg_sort = function () {
-    for (const section of window.cfg_sections()) {
+  function sort() {
+    for (const section of sections()) {
       (section.links || []).sort((a, b) => a.title.localeCompare(b.title));
     }
     store();
     note = "sorted A-Z";
-    refresh();
-  };
+    maca.refresh();
+  }
 
-  window.cfg_reset = function () {
+  function reset() {
     localStorage.removeItem(KEY);
     cfg = JSON.parse(BAKED);
     note = "reloaded config/links.json";
-    refresh();
-  };
+    maca.refresh();
+  }
 
-  window.cfg_export = function () {
+  function save_file() {
     const text = JSON.stringify(cfg, null, 2);
     const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
     const a = document.createElement("a");
@@ -74,9 +87,9 @@ import js """
     a.click();
     URL.revokeObjectURL(url);
     note = "downloaded — move it to config/links.json and rebuild";
-  };
+  }
 
-  window.cfg_import = function () {
+  function load_file() {
     const picker = document.createElement("input");
     picker.type = "file";
     picker.accept = "application/json,.json";
@@ -96,18 +109,14 @@ import js """
         } catch (e) {
           note = "invalid JSON: " + e.message;
         }
-        refresh();
+        maca.refresh();
       });
     });
     picker.click();
-  };
+  }
 
   // ---- the edit dialog -----------------------------------------------------
-  window.cfg_new = function () {
-    target = { s: -1, i: -1 };
-  };
-
-  window.cfg_write = function (title, url, icon, section) {
+  function write(title, url, icon, section) {
     const name = (section || "Links").trim();
     const link = { title: title.trim(), url: url.trim(), icon: icon.trim() };
     if (!link.title || !link.url) {
@@ -131,9 +140,9 @@ import js """
     prune();
     store();
     note = "saved " + link.title;
-  };
+  }
 
-  window.cfg_delete = function () {
+  function remove() {
     if (!target || target.i < 0) return;
     const from = cfg.sections[target.s];
     if (!from) return;
@@ -141,28 +150,50 @@ import js """
     prune();
     store();
     note = "deleted " + (gone ? gone.title : "");
-  };
+  }
 
+  // `maca.set` writes the program's own state and refreshes once. A name the
+  // program never declared throws here and lists what is declared, which is the
+  // difference between an edit dialog that opens filled in and one that opens
+  // blank with nothing said anywhere.
   function open_editor(s, i) {
     const link = cfg.sections[s].links[i];
     target = { s, i };
-    state.form_title = link.title;
-    state.form_url = link.url;
-    state.form_icon = link.icon || "";
-    state.form_section = cfg.sections[s].title;
-    state.editing = true;
-    refresh();
+    maca.set({
+      form_title: link.title,
+      form_url: link.url,
+      form_icon: link.icon || "",
+      form_section: cfg.sections[s].title,
+      editing: true,
+    });
   }
 
-  window.is_locked = () => localStorage.getItem(LOCK) !== "0";
-  window.lock_toggle = () =>
-    localStorage.setItem(LOCK, window.is_locked() ? "0" : "1");
-
-  window.now_time = () => new Date().toTimeString().slice(0, 8);
-  window.now_date = () =>
-    new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
-
-  window.refresh = refresh;
+  // The other half of the boundary: every signature src/home.maca declares
+  // without a body, answered here. Nothing is hung on `window`; a Maca call
+  // reaches these through the bridge.
+  maca.provide({
+    cfg_sections: sections,
+    cfg_note: () => note,
+    is_list: is_list,
+    is_new: () => !target || target.i < 0,
+    is_locked: is_locked,
+    lock_toggle: () => localStorage.setItem(LOCK, is_locked() ? "0" : "1"),
+    cfg_layout_toggle: layout_toggle,
+    cfg_sort: sort,
+    cfg_reset: reset,
+    cfg_export: save_file,
+    cfg_import: load_file,
+    cfg_new: () => {
+      target = { s: -1, i: -1 };
+    },
+    cfg_write: write,
+    cfg_delete: remove,
+    // the page re-renders after a handler by asking for it; `maca.refresh()` is
+    // that ask, and this is how the Maca side spells it
+    refresh: () => maca.refresh(),
+    now_time: now_time,
+    now_date: now_date,
+  });
 
   // ---- drag & drop: reorder within a section, or move across sections ------
   function spot(node) {
@@ -180,29 +211,34 @@ import js """
   }
 
   function move(from, to) {
-    const sections = window.cfg_sections();
-    if (!sections[from.s] || !sections[to.s]) return;
-    const link = sections[from.s].links.splice(from.i, 1)[0];
+    const all = sections();
+    if (!all[from.s] || !all[to.s]) return;
+    const link = all[from.s].links.splice(from.i, 1)[0];
     if (!link) return;
-    const into = sections[to.s].links;
+    const into = all[to.s].links;
     into.splice(to.i < 0 ? into.length : to.i, 0, link);
     store();
     note = "moved " + link.title;
-    refresh();
+    maca.refresh();
   }
 
+  // the two drag classes are declared in Maca so they ship as CSS; `maca.get`
+  // is how the block reads a name the program owns
+  const drag_class = () => maca.get("drag_class");
+  const drop_class = () => maca.get("drop_class");
+
   function drop_done() {
-    mark(drag && drag.el, state.drag_class, false);
-    mark(hover, state.drop_class, false);
+    mark(drag && drag.el, drag_class(), false);
+    mark(hover, drop_class(), false);
     drag = null;
     hover = null;
   }
 
   document.addEventListener("dragstart", (e) => {
     const at = spot(e.target);
-    if (!at || !at.el || window.is_locked()) return;
+    if (!at || !at.el || is_locked()) return;
     drag = at;
-    mark(at.el, state.drag_class, true);
+    mark(at.el, drag_class(), true);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", at.el.dataset.index);
   });
@@ -214,9 +250,9 @@ import js """
     const at = spot(e.target);
     const next = at ? at.el : null;
     if (next === hover) return;
-    mark(hover, state.drop_class, false);
+    mark(hover, drop_class(), false);
     hover = next;
-    mark(hover, state.drop_class, true);
+    mark(hover, drop_class(), true);
   });
 
   document.addEventListener("drop", (e) => {
@@ -238,16 +274,16 @@ import js """
       return;
     }
     // unlocked means arranging, so a tile click rearranges instead of navigating
-    if (!window.is_locked() && e.target.closest && e.target.closest("[data-tile]")) {
+    if (!is_locked() && e.target.closest && e.target.closest("[data-tile]")) {
       e.preventDefault();
     }
   });
 
   function tick() {
     const time = document.getElementById("clock");
-    if (time) time.textContent = window.now_time();
+    if (time) time.textContent = now_time();
     const date = document.getElementById("date");
-    if (date) date.textContent = window.now_date();
+    if (date) date.textContent = now_date();
   }
 
   document.documentElement.setAttribute("data-theme", "night");
@@ -260,7 +296,9 @@ import js """
 Link = { title: str, url: str, icon: str }
 Section = { title: str, links: Link[] }
 
-// what the block above lends to Maca
+// The boundary, stated once: a signature with no body is Maca's half, and the
+// block's `maca.provide` is the host's. A name that nothing implements says so
+// on the first call rather than arriving in the view as `undefined`.
 cfg_sections() -> Section[]
 cfg_note() -> str
 cfg_new() -> bool
@@ -291,7 +329,7 @@ const tile_title = "text-sm font-semibold truncate"
 const pencil_class = "btn btn-xs btn-circle btn-ghost ml-auto shrink-0"
 const section_head = "text-xs uppercase tracking-wide opacity-50 font-semibold"
 const list_class = "flex flex-col gap-2"
-// the drag handlers above read these off `state`, so the classes ship as CSS
+// the drag handlers above read these with `maca.get`, so the classes ship as CSS
 const drag_class = "opacity-30"
 const drop_class = "bg-[rgba(139,92,246,0.35)]"
 // daisyUI's `glass` draws a diagonal reflex that reads as a seam on a wide row
