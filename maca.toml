@@ -2,28 +2,21 @@
 name = "tabpane"
 version = "0.1.0"
 
-# What the page is, as distinct from what its file is called: the source is
-# src/home.maca, and a browser start page should read "New Tab" in the tab.
-# A key that is not title/lang/description is a build error, so a misspelt
-# `titel` cannot quietly leave the file's own name in the title bar.
 [page]
 title = "New Tab"
 lang = "en"
 
-[[bin]]
-name = "tabpane"
-path = "build.maca"
+[build]
+target = "js"
+out = "build"
 
-# Dependencies — `maca add npm:pkg | git+url | name@ver`.
+[[bin]]
+path = "src/home.maca"
+
 [dependencies]
 daisyui = "npm:daisyui@^4"
 iconify-icon = "npm:iconify-icon"
 
-# Formatting — `maca fmt` reads these (defaults shown).
 [format]
 indent_style = "space"
 indent_size = 2
-
-# `maca <name>` runs a script alias.
-[scripts]
-start = "maca run build.maca"

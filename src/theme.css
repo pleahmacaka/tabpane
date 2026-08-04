@@ -1,0 +1,29 @@
+.page {
+  min-height: 100vh;
+  background: linear-gradient(to bottom right, #12121a, #17171f, #1c1c26);
+  color: #e6e3f0;
+  padding: 2.5rem 1rem;
+}
+.tile {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  text-decoration: none;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(0.875rem);
+  transition: background 0.15s ease;
+}
+.tile:hover { background: rgba(255, 255, 255, 0.11); }
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(0.875rem);
+}

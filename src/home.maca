@@ -1,492 +1,385 @@
-// Home — a browser start page. Build with `maca run build.maca`.
-//
-// The browser owns storage, JSON, file pickers and drag events (the `import js`
-// block); the page itself — clock, lock, sections, tiles, editor — is Maca.
-// The two meet on `maca` and nowhere else: the block answers the signatures
-// declared here with `maca.provide`, writes this file's state with `maca.set`
-// and reads it with `maca.get`.
-// Styling is Tailwind utilities + daisyUI classes only, no stylesheet of ours.
+import css "npm:daisyui/dist/full.css"
+import css "theme.css"
+import js "npm:iconify-icon"
 
-// A quoted string names a file, read at build time and inlined; a """…""" block
-// is source. The full daisyUI sheet, not styled.css: `glass`, `modal` and the
-// transitions the page leans on only exist in this one. It lands ahead of the
-// generated <style>, so our own utilities still win.
-import css "../maca_modules/daisyui/dist/full.css"
-import js "../maca_modules/iconify-icon/dist/iconify-icon.min.js"
-// written by build.maca, which picks config/links.local.json over links.json
-import js "links.gen.js"
-
-import js """
-(function () {
-  const KEY = "homepage.config";
-  const LOCK = "homepage.locked";
-  // kept as text: dragging and sorting mutate `cfg` in place, and a shared
-  // object would let those edits rewrite the copy "Reload config file" restores.
-  const BAKED = JSON.stringify(window.__CFG__ || { sections: [] });
-
-  let cfg = restore();
-  let note = "";
-  let drag = null;
-  let hover = null;
-  let target = null;
-
-  function restore() {
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return JSON.parse(BAKED);
-  }
-
-  function store() {
-    localStorage.setItem(KEY, JSON.stringify(cfg, null, 2));
-  }
-
-  function prune() {
-    cfg.sections = cfg.sections.filter((s) => (s.links || []).length > 0);
-  }
-
-  // Local, because the block's own code calls them too; `maca.provide` below is
-  // what makes them answer the Maca declarations.
-  const sections = () => cfg.sections || [];
-  const is_list = () => cfg.layout !== "grid";
-  const is_locked = () => localStorage.getItem(LOCK) !== "0";
-  // the clock's own tick writes these into the two nodes as well
-  const now_time = () => new Date().toTimeString().slice(0, 8);
-  const now_date = () =>
-    new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
-
-  function layout_toggle() {
-    cfg.layout = is_list() ? "grid" : "list";
-    store();
-    note = "layout: " + cfg.layout;
-  }
-
-  function sort() {
-    for (const section of sections()) {
-      (section.links || []).sort((a, b) => a.title.localeCompare(b.title));
-    }
-    store();
-    note = "sorted A-Z";
-    maca.refresh();
-  }
-
-  function reset() {
-    localStorage.removeItem(KEY);
-    cfg = JSON.parse(BAKED);
-    note = "reloaded config/links.json";
-    maca.refresh();
-  }
-
-  function save_file() {
-    const text = JSON.stringify(cfg, null, 2);
-    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "links.json";
-    a.click();
-    URL.revokeObjectURL(url);
-    note = "downloaded — move it to config/links.json and rebuild";
-  }
-
-  function load_file() {
-    const picker = document.createElement("input");
-    picker.type = "file";
-    picker.accept = "application/json,.json";
-    picker.addEventListener("change", () => {
-      const file = picker.files[0];
-      if (!file) return;
-      file.text().then((text) => {
-        try {
-          const next = JSON.parse(text);
-          if (!next || !Array.isArray(next.sections)) {
-            note = "config needs a \"sections\" array";
-          } else {
-            cfg = next;
-            store();
-            note = "imported";
-          }
-        } catch (e) {
-          note = "invalid JSON: " + e.message;
-        }
-        maca.refresh();
-      });
-    });
-    picker.click();
-  }
-
-  // ---- the edit dialog -----------------------------------------------------
-  function write(title, url, icon, section) {
-    const name = (section || "Links").trim();
-    const link = { title: title.trim(), url: url.trim(), icon: icon.trim() };
-    if (!link.title || !link.url) {
-      note = "title and url are required";
-      return;
-    }
-    let at = -1;
-    if (target && target.i >= 0) {
-      const from = cfg.sections[target.s];
-      if (from) {
-        from.links.splice(target.i, 1);
-        if (from.title === name) at = target.i;
-      }
-    }
-    let into = cfg.sections.find((s) => s.title === name);
-    if (!into) {
-      into = { title: name, links: [] };
-      cfg.sections.push(into);
-    }
-    into.links.splice(at < 0 ? into.links.length : at, 0, link);
-    prune();
-    store();
-    note = "saved " + link.title;
-  }
-
-  function remove() {
-    if (!target || target.i < 0) return;
-    const from = cfg.sections[target.s];
-    if (!from) return;
-    const gone = from.links.splice(target.i, 1)[0];
-    prune();
-    store();
-    note = "deleted " + (gone ? gone.title : "");
-  }
-
-  // `maca.set` writes the program's own state and refreshes once. A name the
-  // program never declared throws here and lists what is declared, which is the
-  // difference between an edit dialog that opens filled in and one that opens
-  // blank with nothing said anywhere.
-  function open_editor(s, i) {
-    const link = cfg.sections[s].links[i];
-    target = { s, i };
-    maca.set({
-      form_title: link.title,
-      form_url: link.url,
-      form_icon: link.icon || "",
-      form_section: cfg.sections[s].title,
-      editing: true,
-    });
-  }
-
-  // The other half of the boundary: every signature src/home.maca declares
-  // without a body, answered here. Nothing is hung on `window`; a Maca call
-  // reaches these through the bridge.
-  maca.provide({
-    cfg_sections: sections,
-    cfg_note: () => note,
-    is_list: is_list,
-    is_new: () => !target || target.i < 0,
-    is_locked: is_locked,
-    lock_toggle: () => localStorage.setItem(LOCK, is_locked() ? "0" : "1"),
-    cfg_layout_toggle: layout_toggle,
-    cfg_sort: sort,
-    cfg_reset: reset,
-    cfg_export: save_file,
-    cfg_import: load_file,
-    cfg_new: () => {
-      target = { s: -1, i: -1 };
-    },
-    cfg_write: write,
-    cfg_delete: remove,
-    // the page re-renders after a handler by asking for it; `maca.refresh()` is
-    // that ask, and this is how the Maca side spells it
-    refresh: () => maca.refresh(),
-    now_time: now_time,
-    now_date: now_date,
-  });
-
-  // ---- drag & drop: reorder within a section, or move across sections ------
-  function spot(node) {
-    if (!node || !node.closest) return null;
-    const tile = node.closest("[data-tile]");
-    if (tile) {
-      return { s: +tile.dataset.section, i: +tile.dataset.index, el: tile };
-    }
-    const zone = node.closest("[data-drop]");
-    return zone ? { s: +zone.dataset.section, i: -1, el: null } : null;
-  }
-
-  function mark(el, cls, on) {
-    if (el) el.classList.toggle(cls, on);
-  }
-
-  function move(from, to) {
-    const all = sections();
-    if (!all[from.s] || !all[to.s]) return;
-    const link = all[from.s].links.splice(from.i, 1)[0];
-    if (!link) return;
-    const into = all[to.s].links;
-    into.splice(to.i < 0 ? into.length : to.i, 0, link);
-    store();
-    note = "moved " + link.title;
-    maca.refresh();
-  }
-
-  // the two drag classes are declared in Maca so they ship as CSS; `maca.get`
-  // is how the block reads a name the program owns
-  const drag_class = () => maca.get("drag_class");
-  const drop_class = () => maca.get("drop_class");
-
-  function drop_done() {
-    mark(drag && drag.el, drag_class(), false);
-    mark(hover, drop_class(), false);
-    drag = null;
-    hover = null;
-  }
-
-  document.addEventListener("dragstart", (e) => {
-    const at = spot(e.target);
-    if (!at || !at.el || is_locked()) return;
-    drag = at;
-    mark(at.el, drag_class(), true);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", at.el.dataset.index);
-  });
-
-  document.addEventListener("dragover", (e) => {
-    if (!drag) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const at = spot(e.target);
-    const next = at ? at.el : null;
-    if (next === hover) return;
-    mark(hover, drop_class(), false);
-    hover = next;
-    mark(hover, drop_class(), true);
-  });
-
-  document.addEventListener("drop", (e) => {
-    if (!drag) return;
-    e.preventDefault();
-    const at = spot(e.target);
-    const from = drag;
-    drop_done();
-    if (at) move(from, at);
-  });
-
-  document.addEventListener("dragend", drop_done);
-
-  document.addEventListener("click", (e) => {
-    const pencil = e.target.closest ? e.target.closest("[data-edit]") : null;
-    if (pencil) {
-      e.preventDefault();
-      open_editor(+pencil.dataset.section, +pencil.dataset.index);
-      return;
-    }
-    // unlocked means arranging, so a tile click rearranges instead of navigating
-    if (!is_locked() && e.target.closest && e.target.closest("[data-tile]")) {
-      e.preventDefault();
-    }
-  });
-
-  function tick() {
-    const time = document.getElementById("clock");
-    if (time) time.textContent = now_time();
-    const date = document.getElementById("date");
-    if (date) date.textContent = now_date();
-  }
-
-  document.documentElement.setAttribute("data-theme", "night");
-  // the clock writes its own nodes: an update() every second would rebuild the
-  // tiles mid-drag and drop the caret out of the dialog's inputs.
-  setInterval(tick, 1000);
-})();
-"""
+import { encode, decode } from std/json
+import { local_start, local_store, local_forget } from web/storage
+import { every_ms, stop_every, clock_time, clock_date } from web/time
+import { download, pick_text } from web/file
 
 Link = { title: str, url: str, icon: str }
 Section = { title: str, links: Link[] }
+Config = { layout: Layout, sections: Section[] }
 
-// The boundary, stated once: a signature with no body is Maca's half, and the
-// block's `maca.provide` is the host's. A name that nothing implements says so
-// on the first call rather than arriving in the view as `undefined`.
-cfg_sections() -> Section[]
-cfg_note() -> str
-cfg_new() -> bool
-cfg_write(title: str, url: str, icon: str, section: str) -> bool
-cfg_delete() -> bool
-cfg_sort() -> bool
-cfg_reset() -> bool
-cfg_export() -> bool
-cfg_import() -> bool
-cfg_layout_toggle() -> bool
-is_list() -> bool
-is_new() -> bool
-is_locked() -> bool
-lock_toggle() -> bool
-refresh() -> bool
-now_time() -> str
-now_date() -> str
+Layout = List | Grid
+Target = Fresh | Existing(int, int)
+Where = End | At(int)
+Spot = Nowhere | Tile(int, int) | Tail(int)
+Grip = Idle | Holding(int, int)
+Edit = Closed | Editing(Target)
 
-editing = false
-form_title = ""
-form_url = ""
-form_icon = ""
+Links = "../config/links.json"
+Saved = "homepage.config"
+LockKey = "homepage.locked"
+Ticking = every_ms(1000)
+
+config: Config = local_start(Saved, data(Links))
+locked = local_start(LockKey, true)
+note = ""
+edit = Closed
+form = blank()
 form_section = ""
 
-const tile_class = "btn btn-ghost glass h-auto min-h-0 justify-start gap-3 px-3 py-3 rounded-xl no-underline font-normal"
-const tile_icon = "text-2xl shrink-0"
-const tile_title = "text-sm font-semibold truncate"
-const pencil_class = "btn btn-xs btn-circle btn-ghost ml-auto shrink-0"
-const section_head = "text-xs uppercase tracking-wide opacity-50 font-semibold"
-const list_class = "flex flex-col gap-2"
-// the drag handlers above read these with `maca.get`, so the classes ship as CSS
-const drag_class = "opacity-30"
-const drop_class = "bg-[rgba(139,92,246,0.35)]"
-// daisyUI's `glass` draws a diagonal reflex that reads as a seam on a wide row
-const glass_vars = "--glass-opacity:7%;--glass-reflex-opacity:0%;--glass-blur:14px"
-const grid_class = "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"
+blank() -> Link => Link { title = "", url = "", icon = "lucide:link" }
 
-pencil(s: int, i: int) -> str {
-  glyph = "<iconify-icon icon=\"lucide:pencil\"></iconify-icon>"
-  meta = "data-edit=\"\" data-section=\"{s}\" data-index=\"{i}\""
-  "<span class=\"{pencil_class}\" {meta}>{glyph}</span>"
+commit(next: Config, said: str) {
+  filled = next.sections.filter(group => group.links.length() > 0)
+  config = local_store(Saved, next with { sections = filled })
+  note = said
 }
 
-tile(link: Link, s: int, i: int) -> str {
-  icon = "<iconify-icon class=\"{tile_icon}\" icon=\"{link.icon}\"></iconify-icon>"
-  name = "<span class=\"{tile_title}\">{link.title}</span>"
-  edit = is_locked() ? "" : pencil(s, i)
-  meta = "data-tile=\"\" data-section=\"{s}\" data-index=\"{i}\" draggable=\"true\""
-  open = "<a class=\"{tile_class}\" style=\"{glass_vars}\" href=\"{link.url}\" title=\"{link.url}\" {meta}>"
-  "{open}{icon}{name}{edit}</a>"
+remove_link(from: Config, section: int, index: int) -> Config {
+  group = from.sections[section]
+  shorter = group with { links = group.links.remove(index) }
+
+  from with { sections = from.sections.set(section, shorter) }
 }
 
-section_html(section: Section, s: int) -> str {
-  tiles = ""
-  i = 0
-  while i < len(section.links) {
-    tiles = tiles ++ tile(section.links[i], s, i)
-    i = i + 1
+insert_link(into: Config, name: str, link: Link, where: Where) -> Config {
+  section = into.sections.index_of_by(group => group.title == name)
+
+  if section < 0 {
+    created = Section { title = name, links = [link] }
+
+    return into with { sections = into.sections.push(created) }
   }
-  head = "<h2 class=\"{section_head}\">{section.title}</h2>"
-  rows = is_list() ? list_class : grid_class
-  body = "<div class=\"{rows}\">{tiles}</div>"
-  wrap = "<section class=\"{list_class}\" data-drop=\"\" data-section=\"{s}\">"
-  "{wrap}{head}{body}</section>"
-}
 
-sections_html() -> str {
-  sections = cfg_sections()
-  out = ""
-  s = 0
-  while s < len(sections) {
-    out = out ++ section_html(sections[s], s)
-    s = s + 1
+  group = into.sections[section]
+  at = match where {
+    End => group.links.length()
+    At(index) => index
   }
-  out
+  longer = group with { links = group.links.insert(at, link) }
+
+  into with { sections = into.sections.set(section, longer) }
 }
-
-lock_icon() -> str {
-  glyph = is_locked() ? "lucide:lock" : "lucide:lock-open"
-  "<iconify-icon class=\"text-2xl\" icon=\"{glyph}\"></iconify-icon>"
-}
-
-icon_preview() -> str =>
-  "<iconify-icon class=\"text-2xl\" icon=\"{form_icon}\"></iconify-icon>"
-
-lock_class() -> str =>
-  is_locked()
-    ? "btn btn-ghost btn-circle opacity-30"
-    : "btn btn-ghost btn-circle opacity-70"
-
-toolbar_class() -> str =>
-  is_locked()
-    ? "hidden"
-    : "glass flex flex-wrap items-center gap-2 p-3 rounded-xl"
-
-modal_class() -> str => editing ? "modal modal-open" : "modal"
-
-delete_class() -> str =>
-  is_new() ? "hidden" : "btn btn-sm btn-error btn-outline"
-
-layout_label() -> str => is_list() ? "Vertical" : "Grid"
 
 toggle_lock() {
-  lock_toggle()
-  refresh()
+  locked = local_store(LockKey, !locked)
 }
 
 toggle_layout() {
-  cfg_layout_toggle()
-  refresh()
+  next = if config.layout == Grid {
+    List
+  } else {
+    Grid
+  }
+
+  commit(config with { layout = next }, "layout: {next}")
 }
 
-add_link() {
-  cfg_new()
-  form_title = ""
-  form_url = ""
-  form_icon = "lucide:link"
-  form_section = ""
-  editing = true
-  refresh()
+sort_links() {
+  sorted = config.sections.map(group =>
+    group with { links = group.links.sort_by(link => link.title) })
+
+  commit(config with { sections = sorted }, "sorted A-Z")
 }
 
-edit_save() {
-  cfg_write(form_title, form_url, form_icon, form_section)
-  editing = false
-  refresh()
+reset_config() {
+  local_forget(Saved)
+  config = data(Links)
+  note = "reloaded {Links}"
 }
-
-edit_delete() {
-  cfg_delete()
-  editing = false
-  refresh()
-}
-
-edit_close() {
-  editing = false
-  refresh()
-}
-
-sort_links() { cfg_sort() }
 
 export_json() {
-  cfg_export()
-  refresh()
+  download("links.json", encode(config))
+  note = "downloaded: move it to {Links} and rebuild"
 }
 
-import_json() { cfg_import() }
+import_json() {
+  text = await pick_text("application/json")
 
-reset_config() { cfg_reset() }
+  if text == "" {
+    return
+  }
+
+  next: Config = decode(text)
+  commit(next, "imported")
+}
 
 main() -> Element =>
-  div(class="min-h-screen bg-gradient-to-br from-base-300 via-base-200 to-base-100 text-base-content font-sans px-4 py-10"
+  div(class="page", data-theme="night"
     div(class="mx-auto max-w-3xl flex flex-col gap-8"
       header(class="flex items-center gap-4"
-        div(class="flex flex-col"
-          span(id="clock", class="text-[2.6rem] leading-none font-bold tabular-nums", now_time())
-          span(id="date", class="text-xs opacity-50 mt-1", now_date())
-        )
+        clock_face()
         div(class="flex-1")
-        button(class=lock_class(), on:click=toggle_lock, html=lock_icon())
+        lock_button()
       )
-      div(class="flex flex-col gap-6", html=sections_html())
-      div(class=toolbar_class(), style=glass_vars
-        button(class="btn btn-sm btn-primary", on:click=add_link, "Add link")
-        button(class="btn btn-sm", on:click=toggle_layout, layout_label())
-        button(class="btn btn-sm", on:click=sort_links, "Sort A-Z")
-        button(class="btn btn-sm", on:click=export_json, "Export")
-        button(class="btn btn-sm", on:click=import_json, "Import")
-        button(class="btn btn-sm btn-ghost", on:click=reset_config, "Reload config file")
-        span(class="text-xs opacity-50", cfg_note())
-      )
+      board()
+      toolbar()
     )
-    div(class=modal_class()
-      div(class="modal-box glass flex flex-col gap-3", style=glass_vars
-        h3(class="font-bold text-lg", "Link")
-        input(class="input input-bordered w-full", placeholder="Title", bind:value=form_title)
-        input(class="input input-bordered w-full", placeholder="https://…", bind:value=form_url)
-        div(class="flex items-center gap-2"
-          input(class="input input-bordered flex-1", placeholder="lucide:link", bind:value=form_icon)
-          span(class="w-10 flex items-center justify-center", html=icon_preview())
-        )
-        input(class="input input-bordered w-full", placeholder="Section", bind:value=form_section)
-        div(class="modal-action"
-          button(class=delete_class(), on:click=edit_delete, "Delete")
-          div(class="flex-1")
-          button(class="btn btn-sm btn-ghost", on:click=edit_close, "Cancel")
-          button(class="btn btn-sm btn-primary", on:click=edit_save, "Save")
-        )
+    dialog()
+  )
+
+lock_button() -> Element {
+  dim = if locked {
+    "opacity-30"
+  } else {
+    "opacity-70"
+  }
+
+  glyph = if locked {
+    "lucide:lock"
+  } else {
+    "lucide:lock-open"
+  }
+
+  button(class="btn btn-ghost btn-circle {dim}", onclick=toggle_lock
+    iconify-icon(class="text-2xl", icon=glyph))
+}
+
+clock_face() -> Element =>
+  div(class="flex flex-col"
+    span(class="text-[2.6rem] leading-none font-bold tabular-nums", clock_time())
+    span(class="text-xs opacity-50 mt-1", clock_date())
+  )
+
+board() -> Element {
+  grip = Idle
+  hovered = Nowhere
+
+  grab(section: int, index: int) {
+    if locked {
+      return
+    }
+
+    grip = Holding(section, index)
+  }
+
+  hover(spot: Spot) {
+    hovered = spot
+  }
+
+  release() {
+    grip = Idle
+    hovered = Nowhere
+  }
+
+  dropped(into: Config, link: Link, onto: Spot) -> Config =>
+    match onto {
+      Nowhere => into
+      Tile(section, index) => insert_link(into, config.sections[section].title,
+                                          link, At(index))
+      Tail(section) => insert_link(into, config.sections[section].title, link, End)
+    }
+
+  drop(onto: Spot) {
+    held = grip
+    release()
+
+    match held {
+      Idle => return
+      Holding(section, index) => {
+        link = config.sections[section].links[index]
+        pruned = remove_link(config, section, index)
+
+        commit(dropped(pruned, link, onto), "moved {link.title}")
+      }
+    }
+  }
+
+  pencil() -> Element[] {
+    if locked {
+      return []
+    }
+
+    [span(class="btn btn-xs btn-circle btn-ghost ml-auto",
+       iconify-icon(icon="lucide:pencil"))]
+  }
+
+  tile(link: Link, section: int, index: int) -> Element {
+    lifted = if grip == Holding(section, index) {
+      "opacity-30"
+    } else {
+      ""
+    }
+
+    marked = if hovered == Tile(section, index) {
+      "ring-2 ring-primary"
+    } else {
+      ""
+    }
+
+    body = [
+      iconify-icon(class="text-2xl shrink-0", icon=link.icon),
+      span(class="text-sm font-semibold truncate", link.title)
+    ] ++ pencil()
+
+    if locked {
+      return a(class="tile {lifted}", href=link.url, title=link.url, body)
+    }
+
+    div(class="tile {lifted} {marked}", title=link.url, draggable=true,
+        ondragstart=grab(section, index),
+        ondragover=hover(Tile(section, index)),
+        ondragend=release,
+        ondrop=drop(Tile(section, index)),
+        onclick=open_at(section, index),
+      body)
+  }
+
+  rows = if config.layout == Grid {
+    "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"
+  } else {
+    "flex flex-col gap-2"
+  }
+
+  div(class="flex flex-col gap-6",
+    config.sections.enumerate().map(each =>
+      section(class="flex flex-col gap-2",
+              ondragover=hover(Tail(each.index)),
+              ondrop=drop(Tail(each.index))
+        h2(class="text-xs uppercase tracking-wide opacity-50 font-semibold",
+           each.value.title)
+        div(class=rows,
+          each.value.links.enumerate().map(item =>
+            tile(item.value, each.index, item.index)))
+      )))
+}
+
+toolbar() -> Element[] {
+  if locked {
+    return []
+  }
+
+  layout = if config.layout == Grid {
+    "Grid"
+  } else {
+    "Vertical"
+  }
+
+  [div(class="toolbar"
+    button(class="btn btn-sm btn-primary", onclick=open_new, "Add link")
+    button(class="btn btn-sm", onclick=toggle_layout, layout)
+    button(class="btn btn-sm", onclick=sort_links, "Sort A-Z")
+    button(class="btn btn-sm", onclick=export_json, "Export")
+    button(class="btn btn-sm", onclick=import_json, "Import")
+    button(class="btn btn-sm btn-ghost", onclick=reset_config, "Reload config file")
+    span(class="text-xs opacity-50", note)
+  )]
+}
+
+open_new() {
+  edit = Editing(Fresh)
+  form = blank()
+  form_section = ""
+}
+
+open_at(section: int, index: int) {
+  if locked {
+    return
+  }
+
+  edit = Editing(Existing(section, index))
+  form = config.sections[section].links[index]
+  form_section = config.sections[section].title
+}
+
+close() {
+  edit = Closed
+}
+
+save() {
+  link = Link {
+    title = form.title.trim(),
+    url = form.url.trim(),
+    icon = form.icon.trim()
+  }
+
+  if link.title == "" || link.url == "" {
+    note = "title and url are required"
+
+    return
+  }
+
+  name = form_section.trim()
+
+  if name == "" {
+    name = "Links"
+  }
+
+  match edit {
+    Closed => return
+    Editing(target) => commit(saved(target, name, link), "saved {link.title}")
+  }
+
+  close()
+}
+
+saved(target: Target, name: str, link: Link) -> Config =>
+  match target {
+    Fresh => insert_link(config, name, link, End)
+    Existing(section, index) => insert_link(remove_link(config, section, index),
+                                            name, link, kept(section, index, name))
+  }
+
+kept(section: int, index: int, name: str) -> Where {
+  if config.sections[section].title == name {
+    return At(index)
+  }
+
+  End
+}
+
+erase() {
+  match edit {
+    Closed => return
+    Editing(Fresh) => return
+    Editing(Existing(section, index)) => {
+      gone = config.sections[section].links[index].title
+      commit(remove_link(config, section, index), "deleted {gone}")
+    }
+  }
+
+  close()
+}
+
+delete_button() -> Element[] {
+  match edit {
+    Editing(Existing(_, _)) =>
+      [button(class="btn btn-sm btn-error btn-outline", onclick=erase, "Delete")]
+    Closed => []
+    Editing(Fresh) => []
+  }
+}
+
+dialog() -> Element[] =>
+  match edit {
+    Closed => []
+    Editing(_) => [dialog_box()]
+  }
+
+dialog_box() -> Element =>
+  div(class="modal modal-open"
+    div(class="modal-box glass flex flex-col gap-3"
+      h3(class="font-bold text-lg", "Link")
+      input(class="input input-bordered w-full", placeholder="Title",
+            value=form.title)
+      input(class="input input-bordered w-full", placeholder="https://…",
+            value=form.url)
+      div(class="flex items-center gap-2"
+        input(class="input input-bordered flex-1", placeholder="lucide:link",
+              value=form.icon)
+        span(class="w-10 flex items-center justify-center",
+          iconify-icon(class="text-2xl", icon=form.icon))
+      )
+      input(class="input input-bordered w-full", placeholder="Section",
+            value=form_section)
+      div(class="modal-action"
+        delete_button()
+        div(class="flex-1")
+        button(class="btn btn-sm btn-ghost", onclick=close, "Cancel")
+        button(class="btn btn-sm btn-primary", onclick=save, "Save")
       )
     )
   )
