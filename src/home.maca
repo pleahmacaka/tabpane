@@ -1,6 +1,6 @@
-import css "npm:daisyui/dist/full.css"
-import css "theme.css"
-import js "npm:iconify-icon"
+import "npm:daisyui/dist/full.css"
+import "theme.css"
+import { iconify_icon } from "npm:iconify-icon"
 
 import { encode, decode } from std/json
 import { local_start, local_store, local_forget } from web/storage
